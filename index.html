@@ -78,7 +78,7 @@
     <p class="lead"></p>
   </header>
 
-  <!-- 两行图标标签栏（aria-label 改为“功效分类”） -->
+  <!-- 两行图标标签栏（改为显示“功效”） -->
   <div class="tabs" id="tabs" aria-label="功效分类"></div>
 
   <div class="card-main" role="region" aria-live="polite">
@@ -142,13 +142,12 @@ function getImageUrl(itemIndex, imageType){
 }
 function getCacheKey(itemIndex, imageType){ return `${itemIndex}_${imageType}`; }
 
-/* ------------------ 高级加载器（改进点） ------------------ ...（其余加载器代码保持不变） */
-
-const imageCache = new Map();
-const controllers = new Map();
-let MAX_CONCURRENCY = 6;
+/* ------------------ 高级加载器（改进点） ------------------ */
+const imageCache = new Map(); // key -> {src, blob, loaded, error, loadingPromise}
+const controllers = new Map(); // key -> AbortController (可用于取消)
+let MAX_CONCURRENCY = 6; // 适当提高以利用http/2或本地网络
 let currentConcurrency = 0;
-const queue = [];
+const queue = []; // {fn,resolve,reject,priority}
 
 function enqueueLoad(taskFn, priority=false){
   return new Promise((resolve,reject)=>{
@@ -157,6 +156,7 @@ function enqueueLoad(taskFn, priority=false){
     processQueue();
   });
 }
+
 function processQueue(){
   if (!queue.length) return;
   if (currentConcurrency >= MAX_CONCURRENCY) return;
@@ -164,6 +164,7 @@ function processQueue(){
   currentConcurrency++;
   job.fn().then(res=>{ currentConcurrency--; job.resolve(res); processQueue(); }).catch(err=>{ currentConcurrency--; job.reject(err); processQueue(); });
 }
+
 async function fetchAndDecodeImage(url, timeoutMs=9000, key=null){
   const controller = new AbortController();
   if (key) controllers.set(key, controller);
@@ -183,6 +184,7 @@ async function fetchAndDecodeImage(url, timeoutMs=9000, key=null){
     return {blob, bitmap:null};
   }catch(err){ clearTimeout(id); throw err; }
 }
+
 function smartLoadImage(itemIndex, imageType, {priority=false} = {}){
   const key = getCacheKey(itemIndex, imageType);
   const existing = imageCache.get(key);
@@ -190,6 +192,7 @@ function smartLoadImage(itemIndex, imageType, {priority=false} = {}){
     if (existing.loaded) return Promise.resolve(existing);
     if (existing.loadingPromise) return existing.loadingPromise;
   }
+
   const url = getImageUrl(itemIndex, imageType);
   const task = async ()=>{
     try{
@@ -206,10 +209,12 @@ function smartLoadImage(itemIndex, imageType, {priority=false} = {}){
       throw err;
     }
   };
+
   const promise = enqueueLoad(task, priority).then(res=>res).catch(err=>{ throw err; });
   imageCache.set(key, {loadingPromise: promise});
   return promise;
 }
+
 function displayCachedImage(imgEl, key, alt){
   const entry = imageCache.get(key);
   if (entry && entry.loaded && entry.src){
@@ -221,8 +226,9 @@ function displayCachedImage(imgEl, key, alt){
   }
   return false;
 }
+
 function makeSmallPlaceholder(text){
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180"><rect width="100%" height="100%" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14" fill="%23888">${text}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180"><rect width="100%" height="100%" fill="#f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14" fill="#888">${text}</text></svg>`;
   return 'data:image/svg+xml,' + encodeURIComponent(svg);
 }
 
@@ -244,38 +250,116 @@ const progressPercent = document.getElementById('progressPercent');
 function showLoading(){ mainLoading.style.display='block'; detailPic.classList.add('loading'); detailScene1.classList.add('loading'); detailScene2.classList.add('loading'); }
 function hideLoading(){ mainLoading.style.display='none'; detailPic.classList.remove('loading'); detailScene1.classList.remove('loading'); detailScene2.classList.remove('loading'); }
 
-/* ------------------ 修改点：renderTabs（标签显示改为“功效”） ------------------ */
-function renderTabs(){ 
-  tabs.innerHTML='';
-  ITEMS.forEach((it,idx)=>{
-    const el = document.createElement('button');
-    el.type='button';
-    el.className='tab' + (idx===0? ' active':'');
-    el.dataset.index=idx;
-    el.setAttribute('aria-pressed', idx===0?'true':'false');
-    // 这里显示的是 it.sub（功效），并将原来的款式 it.title 放到 title 属性作为悬浮提示
-    el.innerHTML=`<span class="icon">${it.icon}</span><span title="${it.title}">${it.sub}</span>`;
-    el.addEventListener('mouseenter', ()=>{ const i=parseInt(el.dataset.index); if (!isNaN(i)) preloadAdjacent(i); });
-    el.addEventListener('touchstart', ()=>{ const i=parseInt(el.dataset.index); if (!isNaN(i)) preloadAdjacent(i); },{passive:true});
-    el.addEventListener('click', async ()=>{
-      document.querySelectorAll('.tab').forEach(t=>{ t.classList.remove('active'); t.setAttribute('aria-pressed','false'); });
-      el.classList.add('active'); el.setAttribute('aria-pressed','true');
-      await switchToItem(parseInt(el.dataset.index));
+async function preloadInitialWithProgress(indices, onProgress, timeout=12000){
+  const keys = [];
+  indices.forEach(index=>{ if (index>=0 && index<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>keys.push({index,type})); } });
+  let completed = 0; const total = keys.length;
+  const trackers = keys.map(({index,type})=>{
+    const key = getCacheKey(index,type);
+    if (imageCache.has(key) && imageCache.get(key).loaded){ completed++; onProgress(Math.round((completed/total)*100)); return Promise.resolve(); }
+    return smartLoadImage(index,type,{priority:false}).then(()=>{ completed++; onProgress(Math.round((completed/total)*100)); }).catch(()=>{ completed++; onProgress(Math.round((completed/total)*100)); });
+  });
+
+  const allSettled = Promise.allSettled(trackers);
+  const timer = new Promise((resolve)=> setTimeout(resolve, timeout, 'timeout'));
+  return Promise.race([allSettled, timer]).then(result=> result === 'timeout' ? {timeout:true} : {timeout:false});
+}
+
+async function preloadMultipleImages(indices){
+  const tasks = [];
+  indices.forEach(idx=>{ if (idx>=0 && idx<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>{ const key = getCacheKey(idx,type); if (!imageCache.has(key) || !imageCache.get(key).loaded) tasks.push(smartLoadImage(idx,type,{priority:false}).catch(()=>{})); }); } });
+  const batch = 8;
+  for (let i=0;i<tasks.length;i+=batch){ await Promise.allSettled(tasks.slice(i,i+batch)); await new Promise(r=>setTimeout(r,30)); }
+}
+
+function preloadAdjacent(currentIndex){
+  const arr = [];
+  for (let i=Math.max(0,currentIndex-2); i<=Math.min(ITEMS.length-1,currentIndex+2); i++) arr.push(i);
+  setTimeout(()=>{ preloadMultipleImages(arr).catch(()=>{}); }, 60);
+}
+
+async function switchToItem(itemIndex){
+  const it = ITEMS[itemIndex]; if(!it) return;
+  detailTitle.textContent = it.title; detailSub.textContent = it.sub; detailFormula.textContent = it.formula; detailScene1Text.textContent = it.scene1Text || '—'; detailScene2Text.textContent = it.scene2Text || '—';
+
+  const keys = [
+    {k:getCacheKey(itemIndex,'product'), el:detailPic, alt:it.title+' 产品图'},
+    {k:getCacheKey(itemIndex,'scene1'), el:detailScene1, alt:it.title+' 场景1'},
+    {k:getCacheKey(itemIndex,'scene2'), el:detailScene2, alt:it.title+' 场景2'}
+  ];
+
+  let needLoad=false;
+  keys.forEach(({k,el,alt})=>{
+    el.alt=alt;
+    if (!displayCachedImage(el,k,alt)){
+      el.src = makeSmallPlaceholder(alt);
+      el.style.opacity='1';
+      needLoad=true;
+    }
+    if (el===detailPic){ el.loading='eager'; el.decoding='async'; }
+  });
+  if (needLoad) showLoading();
+
+  const promises = keys.map(({k})=>{
+    if (imageCache.has(k) && imageCache.get(k).loaded) return Promise.resolve();
+    const [idx,type] = k.split('_');
+    const id = parseInt(idx,10);
+    const priority = type === 'product';
+    return smartLoadImage(id,type,{priority}).then(item=>{
+      const target = keys.find(x=>x.k===k).el;
+      if (target){ target.src = item.src || makeSmallPlaceholder('image'); target.style.opacity='0'; requestAnimationFrame(()=> requestAnimationFrame(()=>{ target.style.opacity='1'; target.style.transition='opacity 0.18s ease'; })); }
+    }).catch(()=>{
+      const target = keys.find(x=>x.k===k).el; if (target) target.src = makeSmallPlaceholder('加载失败');
     });
+  });
+
+  try{ await Promise.race([ promises[0], new Promise((_,rej)=>setTimeout(()=>rej('timeout'),1200)) ]); }catch(e){}
+
+  await Promise.allSettled(promises);
+  hideLoading();
+  preloadAdjacent(itemIndex);
+}
+
+/* ------------------ 渲染标签 & 交互（已改为显示功效 it.sub） ------------------ */
+function renderTabs(){
+  tabs.innerHTML = '';
+  ITEMS.forEach((it, idx) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'tab' + (idx === 0 ? ' active' : '');
+    el.dataset.index = idx;
+    el.setAttribute('aria-pressed', idx === 0 ? 'true' : 'false');
+    // 显示功效（it.sub），并把原款式 it.title 放到 title 属性（悬浮提示）
+    el.innerHTML = `<span class="icon">${it.icon}</span><span title="${it.title}">${it.sub}</span>`;
+
+    el.addEventListener('mouseenter', () => {
+      const i = parseInt(el.dataset.index, 10);
+      if (!isNaN(i)) preloadAdjacent(i);
+    });
+    el.addEventListener('touchstart', () => {
+      const i = parseInt(el.dataset.index, 10);
+      if (!isNaN(i)) preloadAdjacent(i);
+    }, { passive: true });
+
+    el.addEventListener('click', async () => {
+      document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-pressed','false'); });
+      el.classList.add('active'); el.setAttribute('aria-pressed','true');
+      await switchToItem(parseInt(el.dataset.index, 10));
+    });
+
     tabs.appendChild(el);
   });
 }
 
-/* ------------------ 其余逻辑保持不变（切换、预加载、复制等） ------------------ */
 // copy
 document.getElementById('btn-copy').addEventListener('click', ()=>{ const text = `${detailTitle.textContent}\n${detailSub.textContent}\n配方：${detailFormula.textContent}`; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板')).catch(()=>fallbackCopy(text)); else fallbackCopy(text); });
 function fallbackCopy(text){ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动复制:\n'+text);} ta.remove(); }
 
+/* ------------------ 初始化 ------------------ */
 window.addEventListener('beforeunload', ()=>{ imageCache.forEach(val=>{ if (val && val.src) try{ URL.revokeObjectURL(val.src); }catch(e){} }); });
 
 document.addEventListener('DOMContentLoaded', async ()=>{
   renderTabs();
-  const initial = [0];
   let lastPct = 0;
   function onProgress(pct){ lastPct=pct; progressBar.style.width = pct + '%'; progressPercent.textContent = pct + '%'; }
 
