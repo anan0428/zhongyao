@@ -502,6 +502,395 @@ document.addEventListener('DOMContentLoaded', async function() {
     }, 3000);
   }
 });
+
+// 在 ITEMS 定义之后，添加以下代码
+
+// 改进的缓存管理器
+class ImageCacheManager {
+  constructor() {
+    this.memoryCache = new Map();
+    this.loadingPromises = new Map();
+    this.prefetchQueue = [];
+  }
+
+  // 检查图片是否已缓存（内存或浏览器）
+  async isImageCached(url) {
+    // 1. 首先检查内存缓存
+    if (this.memoryCache.has(url) && this.memoryCache.get(url).loaded) {
+      return true;
+    }
+    
+    // 2. 检查浏览器缓存（使用 fetch API 检查缓存）
+    try {
+      const cached = await this.checkBrowserCache(url);
+      return cached;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 检查浏览器缓存
+  async checkBrowserCache(url) {
+    try {
+      const cache = await caches.open('tcm-images');
+      const response = await cache.match(url);
+      return !!response;
+    } catch (e) {
+      // 如果 Cache API 不可用，尝试其他方法
+      return this.checkImageCacheFallback(url);
+    }
+  }
+
+  // 回退方法检查图片缓存
+  async checkImageCacheFallback(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = url;
+      
+      // 设置一个标志，如果图片很快加载完成，说明有缓存
+      let cacheChecked = false;
+      
+      img.onload = () => {
+        if (!cacheChecked) {
+          resolve(true);
+        }
+      };
+      
+      img.onerror = () => {
+        resolve(false);
+      };
+      
+      // 设置一个超时时间，如果图片在短时间内加载完成，说明有缓存
+      setTimeout(() => {
+        cacheChecked = true;
+        resolve(img.complete);
+      }, 50);
+    });
+  }
+
+  // 智能加载图片（优先使用缓存）
+  async loadImage(url, alt) {
+    const cacheKey = url;
+    
+    // 如果已经在加载中，返回该 Promise
+    if (this.loadingPromises.has(cacheKey)) {
+      return this.loadingPromises.get(cacheKey);
+    }
+    
+    // 创建加载 Promise
+    const loadPromise = new Promise(async (resolve, reject) => {
+      try {
+        // 首先检查是否已缓存
+        const isCached = await this.isImageCached(url);
+        
+        if (isCached) {
+          // 从缓存快速加载
+          const img = new Image();
+          img.onload = () => {
+            this.memoryCache.set(cacheKey, {
+              src: url,
+              element: img,
+              loaded: true,
+              cached: true
+            });
+            resolve({ img, cached: true });
+          };
+          img.src = url;
+        } else {
+          // 需要网络加载
+          const img = new Image();
+          img.onload = () => {
+            this.memoryCache.set(cacheKey, {
+              src: url,
+              element: img,
+              loaded: true,
+              cached: false
+            });
+            resolve({ img, cached: false });
+          };
+          img.onerror = reject;
+          img.crossOrigin = 'anonymous';
+          img.src = url;
+          
+          // 设置超时
+          setTimeout(() => {
+            if (!img.complete) {
+              reject(new Error('Image load timeout'));
+            }
+          }, 3000);
+        }
+      } catch (error) {
+        reject(error);
+      }
+    });
+    
+    // 保存 Promise
+    this.loadingPromises.set(cacheKey, loadPromise);
+    
+    // 清理 Promise（10分钟后）
+    setTimeout(() => {
+      this.loadingPromises.delete(cacheKey);
+    }, 10 * 60 * 1000);
+    
+    return loadPromise;
+  }
+
+  // 预加载图片
+  async prefetchImage(url) {
+    if (await this.isImageCached(url)) {
+      return true;
+    }
+    
+    return this.loadImage(url, 'prefetch').then(() => true).catch(() => false);
+  }
+
+  // 批量预加载
+  async prefetchBatch(urls) {
+    const results = [];
+    const batchSize = 2; // 减小批量大小，避免阻塞
+    
+    for (let i = 0; i < urls.length; i += batchSize) {
+      const batch = urls.slice(i, i + batchSize);
+      const batchResults = await Promise.allSettled(
+        batch.map(url => this.prefetchImage(url))
+      );
+      results.push(...batchResults);
+      
+      // 给浏览器喘息时间
+      if (i + batchSize < urls.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    return results;
+  }
+}
+
+// 创建缓存管理器实例
+const cacheManager = new ImageCacheManager();
+
+// 修改 getImageUrl 函数，使其返回完整 URL
+function getImageUrl(itemIndex, imageType) {
+  const imageNumber = itemIndex + 1;
+  const imageTypeMap = {
+    'product': 1,
+    'scene1': 2,
+    'scene2': 3
+  };
+  
+  return `${IMG_BASE_PATH}${imageNumber}_${imageTypeMap[imageType]}.jpg`;
+}
+
+// 修改显示缓存的图片函数
+async function displayImage(imgElement, url, alt) {
+  imgElement.alt = alt;
+  
+  try {
+    // 尝试快速从缓存加载
+    const { img, cached } = await cacheManager.loadImage(url, alt);
+    
+    // 立即设置图片源
+    imgElement.src = img.src;
+    
+    // 如果是缓存的，立即显示，否则显示加载动画
+    if (cached) {
+      imgElement.style.opacity = '1';
+      imgElement.classList.remove('loading');
+    } else {
+      imgElement.classList.add('loading');
+      img.onload = () => {
+        imgElement.classList.remove('loading');
+        imgElement.style.opacity = '1';
+      };
+    }
+    
+    return true;
+  } catch (error) {
+    console.warn(`加载图片失败: ${url}`, error);
+    imgElement.src = makePlaceholder(alt);
+    imgElement.classList.remove('loading');
+    imgElement.style.opacity = '1';
+    return false;
+  }
+}
+
+// 修改预加载多个图片函数
+async function preloadMultipleImages(itemIndices) {
+  const urls = [];
+  
+  for (const index of itemIndices) {
+    if (index >= 0 && index < ITEMS.length) {
+      ['product', 'scene1', 'scene2'].forEach(type => {
+        urls.push(getImageUrl(index, type));
+      });
+    }
+  }
+  
+  // 去重
+  const uniqueUrls = [...new Set(urls)];
+  
+  // 异步预加载，不阻塞UI
+  setTimeout(() => {
+    cacheManager.prefetchBatch(uniqueUrls).catch(() => {});
+  }, 0);
+}
+
+// 修改高性能图片切换函数
+async function switchToItem(itemIndex) {
+  const it = ITEMS[itemIndex];
+  if (!it) return;
+  
+  // 立即更新文字内容
+  detailTitle.textContent = it.title;
+  detailSub.textContent = it.sub;
+  detailFormula.textContent = it.formula;
+  detailScene1Text.textContent = it.scene1Text || '—';
+  detailScene2Text.textContent = it.scene2Text || '—';
+  
+  // 显示加载状态
+  showLoading();
+  
+  // 获取图片URL
+  const imageUrls = [
+    { url: getImageUrl(itemIndex, 'product'), alt: it.title + ' 产品图', element: detailPic },
+    { url: getImageUrl(itemIndex, 'scene1'), alt: it.title + ' 场景1', element: detailScene1 },
+    { url: getImageUrl(itemIndex, 'scene2'), alt: it.title + ' 场景2', element: detailScene2 }
+  ];
+  
+  // 并行加载图片
+  const loadPromises = imageUrls.map(({ url, alt, element }) => 
+    displayImage(element, url, alt)
+  );
+  
+  // 等待所有图片加载完成
+  await Promise.allSettled(loadPromises);
+  
+  // 隐藏加载状态
+  hideLoading();
+  
+  // 预加载相邻图片
+  setTimeout(() => {
+    preloadAdjacentImages(itemIndex);
+  }, 0);
+}
+
+// 修改智能预加载相邻选项
+function preloadAdjacentImages(currentIndex) {
+  const indicesToPreload = [];
+  
+  // 预加载当前、前后各2个
+  for (let i = Math.max(0, currentIndex - 2); i <= Math.min(ITEMS.length - 1, currentIndex + 2); i++) {
+    indicesToPreload.push(i);
+  }
+  
+  // 异步预加载，不阻塞UI
+  setTimeout(() => {
+    preloadMultipleImages(indicesToPreload).catch(() => {});
+  }, 0);
+}
+
+// 修改初始化代码
+document.addEventListener('DOMContentLoaded', async function() {
+  renderTabs();
+  
+  // 快速显示第一个项目
+  const firstTab = document.querySelector('.tab');
+  if (firstTab) {
+    // 立即切换（不等待预加载）
+    const index = parseInt(firstTab.dataset.index);
+    const it = ITEMS[index];
+    
+    // 立即显示文字内容
+    detailTitle.textContent = it.title;
+    detailSub.textContent = it.sub;
+    detailFormula.textContent = it.formula;
+    detailScene1Text.textContent = it.scene1Text || '—';
+    detailScene2Text.textContent = it.scene2Text || '—';
+    
+    // 激活第一个标签
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed', 'false');
+    });
+    firstTab.classList.add('active');
+    firstTab.setAttribute('aria-pressed', 'true');
+    
+    // 开始加载图片（异步，不阻塞）
+    setTimeout(() => {
+      switchToItem(index).catch(() => {});
+    }, 0);
+  }
+  
+  // 立即开始积极预加载
+  setTimeout(() => {
+    // 首先预加载前3个项目
+    preloadMultipleImages([0, 1, 2]);
+    
+    // 然后预加载所有项目（分批进行）
+    setTimeout(() => {
+      const allIndices = ITEMS.map((_, idx) => idx);
+      preloadMultipleImages(allIndices);
+    }, 500);
+    
+    // 添加用户交互触发的预加载
+    let hasInteracted = false;
+    const interactionHandler = () => {
+      if (!hasInteracted) {
+        hasInteracted = true;
+        // 用户第一次交互时，预加载所有图片
+        const allIndices = ITEMS.map((_, idx) => idx);
+        preloadMultipleImages(allIndices);
+        
+        // 移除事件监听器
+        document.removeEventListener('mousemove', interactionHandler);
+        document.removeEventListener('touchstart', interactionHandler);
+      }
+    };
+    
+    document.addEventListener('mousemove', interactionHandler, { once: false, passive: true });
+    document.addEventListener('touchstart', interactionHandler, { once: false, passive: true });
+  }, 100);
+});
+
+// 修改标签的点击事件处理
+el.addEventListener('click', async (e) => {
+  e.preventDefault();
+  
+  // 更新激活状态
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.remove('active');
+    t.setAttribute('aria-pressed', 'false');
+  });
+  el.classList.add('active');
+  el.setAttribute('aria-pressed', 'true');
+  
+  // 切换内容（不等待）
+  const index = parseInt(el.dataset.index);
+  setTimeout(() => {
+    switchToItem(index).catch(() => {});
+  }, 0);
+});
+
+// 修改标签的悬停事件，添加防抖
+let hoverTimer = null;
+el.addEventListener('mouseenter', () => {
+  if (hoverTimer) clearTimeout(hoverTimer);
+  
+  hoverTimer = setTimeout(() => {
+    const hoverIndex = parseInt(el.dataset.index);
+    if (!isNaN(hoverIndex)) {
+      preloadAdjacentImages(hoverIndex);
+    }
+    hoverTimer = null;
+  }, 100); // 100ms 防抖
+});
+
+el.addEventListener('mouseleave', () => {
+  if (hoverTimer) {
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+  }
+});
 </script>
 </body>
 </html>
