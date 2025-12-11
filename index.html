@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>中药配方（优化版）</title>
+  <title>中药配方（优化版，全部预加载）</title>
   <style>
     :root{--bg:#f6f8fb;--card:#ffffff;--muted:#6b7280;--accent:#7c3aed;--radius:12px}
     *{box-sizing:border-box}
@@ -20,6 +20,7 @@
     .tab .icon{font-size:18px;line-height:1;flex-shrink:0}
     .tab span{display:inline-block;max-width:120px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
     .tab.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+    .tab[disabled]{opacity:0.6;pointer-events:none}
 
     /* 主内容卡片 */
     .card-main{background:var(--card);border-radius:var(--radius);padding:14px;margin-top:10px;box-shadow:0 8px 20px rgba(0,0,0,0.06)}
@@ -56,6 +57,10 @@
     .progress-bar{height:12px;border-radius:8px;background:linear-gradient(90deg,var(--accent),#5b21b6);width:0%;transition:width 200ms linear}
     .progress-percent{margin-top:8px;font-size:13px;color:var(--muted)}
     .preloader-spinner{margin-top:12px;border:4px solid rgba(0,0,0,0.06);border-top-color:var(--accent);border-radius:50%;width:36px;height:36px;animation:spin 1s linear infinite}
+    .preloader-actions{margin-top:10px;display:flex;gap:8px;justify-content:center}
+    .preloader-actions button{padding:8px 12px;border-radius:8px;border:0;font-weight:600}
+    .btn-skip{background:#fff;color:var(--accent);border:1px solid rgba(0,0,0,0.06)}
+    .btn-wait{background:var(--accent);color:#fff}
     @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
@@ -63,20 +68,24 @@
 <!-- 全屏预加载遮罩 -->
 <div id="preloader" aria-hidden="false">
   <div class="preloader-card" role="status" aria-live="polite">
-    <div class="preloader-title">正在准备页面…</div>
-    <div class="preloader-sub">正在预加载图片，加载完成后进入页面</div>
+    <div class="preloader-title">正在预加载页面资源…</div>
+    <div class="preloader-sub">页面将在所有图片加载完成后自动进入（或点击“直接进入”跳过）</div>
     <div class="progress-wrap">
       <div id="progressBar" class="progress-bar" style="width:0%"></div>
     </div>
     <div id="progressPercent" class="progress-percent">0%</div>
     <div class="preloader-spinner" aria-hidden="true"></div>
+    <div class="preloader-actions">
+      <button id="skipBtn" class="btn-skip">直接进入</button>
+      <button id="waitBtn" class="btn-wait">继续等待</button>
+    </div>
   </div>
 </div>
 
 <div class="app" id="appContent" style="visibility:hidden;">
   <header>
-    <h1>中药配方速查（优化版）</h1>
-    <p class="lead">改进点：并发受控预加载、fetch+createImageBitmap解码、优先显示已解码图片、减少主线程阻塞。</p>
+    <h1>中药配方速查（优化版，全部预加载）</h1>
+    <p class="lead">改进点：现在页面会尽力把所有图片都预加载完成，加载完成后标签可用。</p>
   </header>
 
   <!-- 两行图标标签栏 -->
@@ -149,7 +158,7 @@ const imageCache = new Map();
 const objectUrlsToRevoke = new Set();
 
 // 并发限制
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 4; // 可根据网络/服务器调整
 let currentConcurrency = 0;
 const queue = [];
 
@@ -175,7 +184,7 @@ function processQueue(){
 }
 
 // 使用 fetch + createImageBitmap 来把解码移出主线程（若支持）
-async function fetchAndDecodeImage(url, timeoutMs=8000){
+async function fetchAndDecodeImage(url, timeoutMs=12000){
   const controller = new AbortController();
   const id = setTimeout(()=> controller.abort(), timeoutMs);
   try{
@@ -262,9 +271,13 @@ const mainLoading = document.getElementById('main-loading');
 const preloader = document.getElementById('preloader');
 const progressBar = document.getElementById('progressBar');
 const progressPercent = document.getElementById('progressPercent');
+const skipBtn = document.getElementById('skipBtn');
+const waitBtn = document.getElementById('waitBtn');
 
 function showLoading(){ mainLoading.style.display='block'; detailPic.classList.add('loading'); detailScene1.classList.add('loading'); detailScene2.classList.add('loading'); }
 function hideLoading(){ mainLoading.style.display='none'; detailPic.classList.remove('loading'); detailScene1.classList.remove('loading'); detailScene2.classList.remove('loading'); }
+
+function enableTabs(){ document.querySelectorAll('.tab').forEach(t=>{ t.disabled=false; t.classList.remove('tab-disabled'); }); }
 
 // 预加载一组索引（并发受控）
 async function preloadMultipleImages(itemIndices){
@@ -288,9 +301,8 @@ function preloadAdjacentImages(currentIndex){
   setTimeout(()=>{ preloadMultipleImages(indicesToPreload).catch(()=>{}); }, 80);
 }
 
-// 新：用于初始预加载并报告进度
-function preloadInitialWithProgress(indices, onProgress, timeout=10000){
-  const imageTasks = [];
+// 新：用于初始预加载并报告进度（这次我们传入所有索引以尽力把全部图片加载完）
+function preloadInitialWithProgress(indices, onProgress, timeout=20000){
   const keys = [];
   indices.forEach(index=>{
     if (index>=0 && index<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>{ keys.push({index,type}); }); }
@@ -313,10 +325,7 @@ function preloadInitialWithProgress(indices, onProgress, timeout=10000){
 
   const allSettled = Promise.allSettled(trackers);
   const timer = new Promise((resolve)=> setTimeout(resolve, timeout, 'timeout'));
-  return Promise.race([allSettled, timer]).then(result=>{
-    // 如果是 timeout 字符串，表示触发超时
-    return result === 'timeout' ? {timeout:true} : {timeout:false};
-  });
+  return Promise.race([allSettled, timer]).then(result=>{ return result === 'timeout' ? {timeout:true} : {timeout:false}; });
 }
 
 // 切换条目，尽量立即显示缓存并并发加载缺失图片
@@ -378,6 +387,7 @@ function renderTabs(){
   ITEMS.forEach((it,idx)=>{
     const el = document.createElement('button');
     el.type='button'; el.className='tab' + (idx===0 ? ' active' : ''); el.dataset.index=idx; el.setAttribute('aria-pressed', idx===0 ? 'true' : 'false');
+    el.disabled = true; // 初始禁用，等全部预加载完成或跳过后启用
     el.innerHTML = `<span class=\"icon\">${it.icon}</span><span>${it.title}</span>`;
 
     const preloadHandler = ()=>{ const hoverIndex = parseInt(el.dataset.index); if (!isNaN(hoverIndex)) preloadAdjacentImages(hoverIndex); };
@@ -396,42 +406,56 @@ function renderTabs(){
 
 // 复制
 document.getElementById('btn-copy').addEventListener('click', ()=>{
-  const text = `${detailTitle.textContent}\n${detailSub.textContent}\n配方：${detailFormula.textContent}`;
+  const text = `${detailTitle.textContent}
+${detailSub.textContent}
+配方：${detailFormula.textContent}`;
   if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板')).catch(()=>fallbackCopy(text)); }
   else fallbackCopy(text);
 });
-function fallbackCopy(text){ const ta = document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动复制:\n'+text); } ta.remove(); }
+function fallbackCopy(text){ const ta = document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动复制:
+'+text); } ta.remove(); }
 
 /* ------------------ 初始化 ------------------ */
 window.addEventListener('beforeunload', ()=>{ objectUrlsToRevoke.forEach(u=>{ try{ URL.revokeObjectURL(u); }catch(e){} }); });
 
 document.addEventListener('DOMContentLoaded', async ()=>{
-  // 1) 显示预加载遮罩（已在 DOM 中）
-  const initialIndices = [0,1,2];
-  const totalImages = initialIndices.length * 3;
-  let lastPercent = 0;
-  function onProgress(pct){ lastPercent = pct; progressBar.style.width = pct + '%'; progressPercent.textContent = pct + '%'; }
-
-  // 2) 开始初始预加载，等待完成或超时（10s）
-  const res = await preloadInitialWithProgress(initialIndices, onProgress, 10000);
-
-  // 如果超时，尽量把进度拉到 100% 以便用户继续
-  if (res && res.timeout) onProgress(100);
-
-  // 3) 隐藏预加载遮罩并展示页面
-  preloader.setAttribute('aria-hidden','true');
-  preloader.style.display = 'none';
-  document.getElementById('appContent').style.visibility = 'visible';
-
-  // 4) 继续普通初始化
   renderTabs();
-  const firstTab = document.querySelector('.tab');
-  if (firstTab) firstTab.click();
 
-  // 5) 空闲时继续加载全部资源
+  // 我们这次尽力把 **全部** 图片都预加载完成后再展示页面（可通过“直接进入”跳过）
   const allIndices = ITEMS.map((_,i)=>i);
-  if ('requestIdleCallback' in window){ requestIdleCallback(()=>{ preloadMultipleImages(allIndices).catch(()=>{}); }, {timeout:3000}); }
-  else setTimeout(()=>{ preloadMultipleImages(allIndices).catch(()=>{}); }, 3000);
+  const totalImages = allIndices.length * 3;
+
+  let aborted = false;
+  skipBtn.addEventListener('click', ()=>{
+    aborted = true; // 标记为用户跳过
+    preloader.setAttribute('aria-hidden','true');
+    preloader.style.display = 'none';
+    document.getElementById('appContent').style.visibility = 'visible';
+    enableTabs();
+    // 继续在后台加载剩余图片
+    preloadMultipleImages(allIndices).catch(()=>{});
+  });
+  waitBtn.addEventListener('click', ()=>{ /* do nothing: 继续等待 */ });
+
+  // 开始预加载全部图片并汇报进度（timeout 20s）
+  function onProgress(pct){ progressBar.style.width = pct + '%'; progressPercent.textContent = pct + '%'; }
+  const res = await preloadInitialWithProgress(allIndices, onProgress, 20000);
+
+  if (!aborted){
+    // 若超时，也放行（避免一直卡住）
+    if (res && res.timeout) onProgress(100);
+    preloader.setAttribute('aria-hidden','true');
+    preloader.style.display = 'none';
+    document.getElementById('appContent').style.visibility = 'visible';
+    enableTabs();
+
+    // 触发第一个标签显示（首次切换会使用缓存的图片）
+    const firstTab = document.querySelector('.tab');
+    if (firstTab){ firstTab.click(); }
+
+    // 任何未完全加载的资源继续在后台加载
+    preloadMultipleImages(allIndices).catch(()=>{});
+  }
 });
 </script>
 </body>
