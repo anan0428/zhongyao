@@ -41,8 +41,9 @@
     /* 主内容卡片 */
     .card-main{background:var(--card);border-radius:var(--radius);padding:14px;margin-top:10px;box-shadow:0 8px 20px rgba(0,0,0,0.06)}
     .hero{display:flex;gap:12px;align-items:flex-start}
-    .hero .pic{width:140px;height:140px;border-radius:10px;overflow:hidden;background:#eee;flex-shrink:0}
-    .hero img{width:100%;height:100%;object-fit:cover;display:block}
+    .hero .pic{width:140px;height:140px;border-radius:10px;overflow:hidden;background:#eee;flex-shrink:0;position:relative}
+    .hero img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity 0.3s ease}
+    .hero img.loading{opacity:0.5}
     h2{margin:0;font-size:17px}
     .meta{font-size:13px;color:var(--muted);margin-top:4px}
 
@@ -51,12 +52,34 @@
     .box{background:#fdfefe;padding:10px;border-radius:10px;font-size:14px;border:1px solid rgba(0,0,0,0.04)}
 
     /* 场景大图样式：每张独占一行，尺寸更大 */
-    .scene-img{width:100%;height:180px;object-fit:cover;border-radius:8px;background:#f3f4f6;display:block}
+    .scene-img{width:100%;height:180px;object-fit:cover;border-radius:8px;background:#f3f4f6;display:block;transition:opacity 0.3s ease}
+    .scene-img.loading{opacity:0.5}
     .scene-text{margin-top:8px;color:var(--muted);font-size:14px}
 
     footer{margin-top:14px;display:flex;gap:10px}
     .btn{flex:1;padding:10px;border:0;border-radius:10px;font-weight:600;background:var(--accent);color:#fff}
 
+    /* 加载动画 */
+    .loading-shimmer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, 
+        rgba(255,255,255,0) 0%, 
+        rgba(255,255,255,0.8) 50%, 
+        rgba(255,255,255,0) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: inherit;
+    }
+    
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    
     @media (max-width:420px){.tab span{max-width:90px}.hero .pic{width:110px;height:110px}.scene-img{height:120px}}
   </style>
 </head>
@@ -72,7 +95,10 @@
 
   <div class="card-main" role="region" aria-live="polite">
     <div class="hero">
-      <div class="pic" id="detail-pic"><img src="" alt="产品图占位"></div>
+      <div class="pic" id="detail-pic">
+        <img src="" alt="产品图占位">
+        <div class="loading-shimmer" style="display:none" id="main-loading"></div>
+      </div>
       <div style="flex:1">
         <h2 id="detail-title">请选择项目</h2>
         <div class="meta" id="detail-sub">选择上方任一标签查看详情</div>
@@ -125,6 +151,9 @@ const ITEMS = [
 // 图片基础路径
 const IMG_BASE_PATH = './img/';
 
+// 图片缓存对象
+const imageCache = {};
+
 // 根据索引获取图片路径
 function getImagePath(itemIndex, imageType) {
   // itemIndex从0开始，图片编号从1开始
@@ -141,17 +170,45 @@ function getImagePath(itemIndex, imageType) {
   return `${IMG_BASE_PATH}${imageNumber}_${imageTypeMap[imageType]}.jpg`;
 }
 
+// 预加载图片
+function preloadImage(src) {
+  return new Promise((resolve, reject) => {
+    // 如果图片已经在缓存中，直接返回
+    if (imageCache[src]) {
+      resolve(imageCache[src]);
+      return;
+    }
+    
+    const img = new Image();
+    img.onload = () => {
+      imageCache[src] = img;
+      resolve(img);
+    };
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+// 预加载所有图片（在后台进行）
+function preloadAllImages() {
+  console.log('开始预加载图片...');
+  
+  ITEMS.forEach((item, index) => {
+    // 预加载当前选项的三张图片
+    const imageTypes = ['product', 'scene1', 'scene2'];
+    imageTypes.forEach(type => {
+      const src = getImagePath(index, type);
+      preloadImage(src).catch(() => {
+        console.warn(`预加载失败: ${src}`);
+      });
+    });
+  });
+}
+
 // 生成 SVG 占位图 dataURL（带文字）- 仅当图片加载失败时使用
 function makePlaceholder(text, w=900, h=540, bg='%23f3f4f6', fg='%23888'){
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="${bg}"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="${fg}">${text}</text></svg>`;
   return 'data:image/svg+xml,' + svg;
-}
-
-// 图片加载失败时的处理函数
-function handleImageError(imgElement, fallbackText, itemIndex, imageType) {
-  console.warn(`图片加载失败: ${getImagePath(itemIndex, imageType)}`);
-  imgElement.src = makePlaceholder(fallbackText);
-  imgElement.onerror = null; // 防止无限循环
 }
 
 const tabs = document.getElementById('tabs');
@@ -163,6 +220,48 @@ const detailScene1 = document.getElementById('detail-scene1');
 const detailScene2 = document.getElementById('detail-scene2');
 const detailScene1Text = document.getElementById('detail-scene1-text');
 const detailScene2Text = document.getElementById('detail-scene2-text');
+const mainLoading = document.getElementById('main-loading');
+
+// 显示加载状态
+function showLoading() {
+  detailPic.classList.add('loading');
+  detailScene1.classList.add('loading');
+  detailScene2.classList.add('loading');
+  mainLoading.style.display = 'block';
+}
+
+// 隐藏加载状态
+function hideLoading() {
+  detailPic.classList.remove('loading');
+  detailScene1.classList.remove('loading');
+  detailScene2.classList.remove('loading');
+  mainLoading.style.display = 'none';
+}
+
+// 预加载相邻选项的图片（智能预加载）
+function preloadAdjacentImages(currentIndex) {
+  // 预加载前一个、当前、后一个选项的图片
+  const indicesToPreload = [];
+  
+  // 前一个选项
+  if (currentIndex > 0) indicesToPreload.push(currentIndex - 1);
+  // 当前选项
+  indicesToPreload.push(currentIndex);
+  // 后一个选项
+  if (currentIndex < ITEMS.length - 1) indicesToPreload.push(currentIndex + 1);
+  
+  indicesToPreload.forEach(index => {
+    const imageTypes = ['product', 'scene1', 'scene2'];
+    imageTypes.forEach(type => {
+      const src = getImagePath(index, type);
+      if (!imageCache[src]) {
+        preloadImage(src).catch(() => {
+          // 静默失败
+        });
+      }
+    });
+  });
+}
 
 function renderTabs(){
   tabs.innerHTML = '';
@@ -174,46 +273,106 @@ function renderTabs(){
     el.dataset.index = idx; // 添加索引以便获取图片
     el.setAttribute('aria-pressed', idx===0 ? 'true' : 'false');
     el.innerHTML = `<span class="icon" aria-hidden="true">${it.icon}</span><span>${it.title}</span>`;
+    
+    // 添加鼠标悬停预加载
+    el.addEventListener('mouseenter', () => {
+      const hoverIndex = parseInt(el.dataset.index);
+      preloadAdjacentImages(hoverIndex);
+    });
+    
     el.addEventListener('click', ()=> select(it.id, el));
     tabs.appendChild(el);
   });
 }
 
+// 当前选中的索引
+let currentIndex = 0;
+
 function select(id, el){
-  document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('active'); t.setAttribute('aria-pressed','false');});
-  if(el){ el.classList.add('active'); el.setAttribute('aria-pressed','true'); }
+  // 获取当前选项的索引
+  const itemIndex = ITEMS.findIndex(x=>x.id===id);
+  currentIndex = itemIndex;
+  
+  // 立即更新文字内容（图片加载需要时间）
   const it = ITEMS.find(x=>x.id===id);
   if(!it) return;
   
-  // 获取当前选项的索引
-  const itemIndex = ITEMS.findIndex(x=>x.id===id);
+  detailTitle.textContent = it.title;
+  detailSub.textContent = it.sub;
+  detailFormula.textContent = it.formula;
+  detailScene1Text.textContent = it.scene1Text || '—';
+  detailScene2Text.textContent = it.scene2Text || '—';
+  
+  // 显示加载状态
+  showLoading();
+  
+  // 移除所有active类
+  document.querySelectorAll('.tab').forEach(t=>{
+    t.classList.remove('active');
+    t.setAttribute('aria-pressed','false');
+  });
+  
+  // 为当前项添加active类
+  if(el){ 
+    el.classList.add('active'); 
+    el.setAttribute('aria-pressed','true'); 
+  }
   
   // 获取图片路径
   const mainImgPath = getImagePath(itemIndex, 'product');
   const scene1ImgPath = getImagePath(itemIndex, 'scene1');
   const scene2ImgPath = getImagePath(itemIndex, 'scene2');
   
-  // 设置产品图
-  detailPic.src = mainImgPath;
-  detailPic.alt = it.title + ' 产品图';
-  detailPic.onerror = () => handleImageError(detailPic, it.title + ' — 产品图', itemIndex, 'product');
+  // 使用Promise.all同时加载三张图片
+  const loadPromises = [
+    loadImageWithCache(detailPic, mainImgPath, it.title + ' 产品图', itemIndex, 'product'),
+    loadImageWithCache(detailScene1, scene1ImgPath, it.title + ' 场景1', itemIndex, 'scene1'),
+    loadImageWithCache(detailScene2, scene2ImgPath, it.title + ' 场景2', itemIndex, 'scene2')
+  ];
   
-  // 设置场景图1
-  detailScene1.src = scene1ImgPath;
-  detailScene1.alt = it.title + ' 场景1';
-  detailScene1.onerror = () => handleImageError(detailScene1, it.title + ' — ' + it.scene1Text, itemIndex, 'scene1');
-  
-  // 设置场景图2
-  detailScene2.src = scene2ImgPath;
-  detailScene2.alt = it.title + ' 场景2';
-  detailScene2.onerror = () => handleImageError(detailScene2, it.title + ' — ' + it.scene2Text, itemIndex, 'scene2');
+  // 所有图片加载完成后隐藏加载状态
+  Promise.allSettled(loadPromises).then(() => {
+    hideLoading();
+    
+    // 预加载下一个可能用到的图片
+    setTimeout(() => {
+      preloadAdjacentImages(itemIndex);
+    }, 100);
+  });
+}
 
-  // 设置文本内容
-  detailTitle.textContent = it.title;
-  detailSub.textContent = it.sub;
-  detailFormula.textContent = it.formula;
-  detailScene1Text.textContent = it.scene1Text || '—';
-  detailScene2Text.textContent = it.scene2Text || '—';
+// 使用缓存的图片加载函数
+function loadImageWithCache(imgElement, src, alt, itemIndex, imageType) {
+  return new Promise((resolve) => {
+    // 如果图片已经在缓存中，直接使用
+    if (imageCache[src]) {
+      imgElement.src = src;
+      imgElement.alt = alt;
+      resolve();
+      return;
+    }
+    
+    // 否则加载新图片
+    imgElement.src = src;
+    imgElement.alt = alt;
+    
+    const img = new Image();
+    img.onload = () => {
+      // 存入缓存
+      imageCache[src] = img;
+      imgElement.src = src;
+      resolve();
+    };
+    
+    img.onerror = () => {
+      console.warn(`图片加载失败: ${src}`);
+      imgElement.src = makePlaceholder(alt);
+      imgElement.onerror = null; // 防止无限循环
+      resolve();
+    };
+    
+    img.src = src;
+  });
 }
 
 // 复制按钮 - 兼容性处理
@@ -243,11 +402,22 @@ function fallbackCopy(text){
 }
 
 // 初始化
-renderTabs();
-const firstTab = document.querySelector('.tab');
-if(firstTab){ 
-  select(firstTab.dataset.id, firstTab); 
-}
+document.addEventListener('DOMContentLoaded', function() {
+  renderTabs();
+  
+  // 预加载第一个选项的图片
+  preloadAdjacentImages(0);
+  
+  // 在空闲时间预加载所有图片（延迟执行，不阻塞页面渲染）
+  setTimeout(() => {
+    preloadAllImages();
+  }, 2000);
+  
+  const firstTab = document.querySelector('.tab');
+  if(firstTab){ 
+    select(firstTab.dataset.id, firstTab); 
+  }
+});
 </script>
 </body>
 </html>
