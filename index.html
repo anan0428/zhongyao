@@ -125,14 +125,14 @@
 <script>
 /* ------------------ 数据 ------------------ */
 const ITEMS = [
-  {id:'insomnia', title:'失眠/压力大', icon:'🌙', sub:'安神助眠款', scene1Text:'酒店客房餐', scene2Text:'深夜便利店', formula:'面粉+酸枣仁+茯苓+远志'},
-  {id:'children', title:'儿童/积食人群', icon:'🧒', sub:'健脾消积款', scene1Text:'亲子餐厅', scene2Text:'幼儿园配餐', formula:'面粉+鸡内金+麦芽+山楂'},
-  {id:'cold', title:'畏寒/低温', icon:'❄️', sub:'御寒暖身款', scene1Text:'火锅店附餐', scene2Text:'社区早餐车', formula:'面粉+生姜+红糖+肉'},
-  {id:'anxiety', title:'焦虑/肝气郁结', icon:'🧭', sub:'疏肝理气款', scene1Text:'职场轻食店', scene2Text:'心理咨询室配套餐', formula:'面粉+佛手+香橼+陈皮'},
-  {id:'fatigue', title:'熬夜肾虚/精力不足', icon:'⚡', sub:'益肾固精款', scene1Text:'男士养生会所', scene2Text:'电竞酒店餐食', formula:'面粉+芡实+莲子+山药'},
-  {id:'throat', title:'用嗓过度/咽喉不适', icon:'🎤', sub:'清咽润喉款', scene1Text:'KTV配套餐', scene2Text:'教师食堂', formula:'面粉+罗汉果+桔梗+百合'},
-  {id:'water', title:'久坐水肿/代谢缓慢', icon:'💧', sub:'消脂排浊款', scene1Text:'瑜伽馆轻食区', scene2Text:'通勤便利店', formula:'面粉+决明子+茯苓+冬瓜'},
-  {id:'stomach', title:'胃寒/秋冬胃痛', icon:'🍜', sub:'温胃散寒款', scene1Text:'北方早餐摊', scene2Text:'社区便民食堂', formula:'面粉+小茴香+干姜+胡椒'}
+  {id:'insomnia', title:'安神助眠款', icon:'🌙', sub:'失眠/压力大', scene1Text:'酒店客房餐', scene2Text:'深夜便利店', formula:'面粉+酸枣仁+茯苓+远志'},
+  {id:'children', title:'健脾消积款', icon:'🧒', sub:'儿童/积食人群', scene1Text:'亲子餐厅', scene2Text:'幼儿园配餐', formula:'面粉+鸡内金+麦芽+山楂'},
+  {id:'cold', title:'御寒暖身款', icon:'❄️', sub:'畏寒/低温', scene1Text:'火锅店附餐', scene2Text:'社区早餐车', formula:'面粉+生姜+红糖+肉'},
+  {id:'anxiety', title:'疏肝理气款', icon:'🧭', sub:'焦虑/肝气郁结', scene1Text:'职场轻食店', scene2Text:'心理咨询室配套餐', formula:'面粉+佛手+香橼+陈皮'},
+  {id:'fatigue', title:'益肾固精款', icon:'⚡', sub:'熬夜肾虚/精力不足', scene1Text:'男士养生会所', scene2Text:'电竞酒店餐食', formula:'面粉+芡实+莲子+山药'},
+  {id:'throat', title:'清咽润喉款', icon:'🎤', sub:'用嗓过度/咽喉不适', scene1Text:'KTV配套餐', scene2Text:'教师食堂', formula:'面粉+罗汉果+桔梗+百合'},
+  {id:'water', title:'消脂排浊款', icon:'💧', sub:'久坐水肿/代谢缓慢', scene1Text:'瑜伽馆轻食区', scene2Text:'通勤便利店', formula:'面粉+决明子+茯苓+冬瓜'},
+  {id:'stomach', title:'温胃散寒款', icon:'🍜', sub:'胃寒/秋冬胃痛', scene1Text:'北方早餐摊', scene2Text:'社区便民食堂', formula:'面粉+小茴香+干姜+胡椒'}
 ];
 const IMG_BASE_PATH = './img/';
 function getImageUrl(itemIndex, imageType){
