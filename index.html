@@ -151,61 +151,150 @@ const ITEMS = [
 // 图片基础路径
 const IMG_BASE_PATH = './img/';
 
-// 图片缓存对象
-const imageCache = {};
+// 增强版图片缓存：存储图片数据和加载状态
+const imageCache = new Map();
 
-// 根据索引获取图片路径
-function getImagePath(itemIndex, imageType) {
-  // itemIndex从0开始，图片编号从1开始
+// 获取图片URL
+function getImageUrl(itemIndex, imageType) {
   const imageNumber = itemIndex + 1;
-  
-  // 图片类型映射：1=产品图，2=场景1图，3=场景2图
   const imageTypeMap = {
     'product': 1,
     'scene1': 2,
     'scene2': 3
   };
   
-  // 生成图片路径：例如 1_1.jpg, 1_2.jpg, 1_3.jpg
   return `${IMG_BASE_PATH}${imageNumber}_${imageTypeMap[imageType]}.jpg`;
 }
 
-// 预加载图片
-function preloadImage(src) {
-  return new Promise((resolve, reject) => {
-    // 如果图片已经在缓存中，直接返回
-    if (imageCache[src]) {
-      resolve(imageCache[src]);
-      return;
-    }
-    
-    const img = new Image();
-    img.onload = () => {
-      imageCache[src] = img;
-      resolve(img);
-    };
-    img.onerror = reject;
-    img.src = src;
-  });
+// 获取缓存键
+function getCacheKey(itemIndex, imageType) {
+  return `${itemIndex}_${imageType}`;
 }
 
-// 预加载所有图片（在后台进行）
-function preloadAllImages() {
-  console.log('开始预加载图片...');
+// 智能预加载图片
+async function smartPreloadImage(itemIndex, imageType) {
+  const cacheKey = getCacheKey(itemIndex, imageType);
   
-  ITEMS.forEach((item, index) => {
-    // 预加载当前选项的三张图片
-    const imageTypes = ['product', 'scene1', 'scene2'];
-    imageTypes.forEach(type => {
-      const src = getImagePath(index, type);
-      preloadImage(src).catch(() => {
-        console.warn(`预加载失败: ${src}`);
+  // 如果已经在缓存中，直接返回
+  if (imageCache.has(cacheKey)) {
+    return imageCache.get(cacheKey);
+  }
+  
+  const url = getImageUrl(itemIndex, imageType);
+  
+  // 创建加载Promise
+  const loadPromise = new Promise((resolve, reject) => {
+    const img = new Image();
+    
+    img.onload = () => {
+      // 使用createImageBitmap来获取更快的渲染性能
+      if (typeof createImageBitmap === 'function') {
+        createImageBitmap(img)
+          .then(bitmap => {
+            imageCache.set(cacheKey, {
+              src: url,
+              element: img,
+              bitmap: bitmap,
+              loaded: true
+            });
+            resolve(url);
+          })
+          .catch(() => {
+            // fallback
+            imageCache.set(cacheKey, {
+              src: url,
+              element: img,
+              loaded: true
+            });
+            resolve(url);
+          });
+      } else {
+        imageCache.set(cacheKey, {
+          src: url,
+          element: img,
+          loaded: true
+        });
+        resolve(url);
+      }
+    };
+    
+    img.onerror = (error) => {
+      console.warn(`图片加载失败: ${url}`, error);
+      imageCache.set(cacheKey, {
+        src: null,
+        loaded: false,
+        error: true
       });
-    });
+      reject(new Error(`Failed to load image: ${url}`));
+    };
+    
+    // 设置crossOrigin避免缓存问题
+    img.crossOrigin = 'anonymous';
+    img.src = url;
+    
+    // 设置超时（5秒）
+    setTimeout(() => {
+      if (!img.complete) {
+        console.warn(`图片加载超时: ${url}`);
+        img.onerror = null;
+        img.onload = null;
+        reject(new Error(`Image load timeout: ${url}`));
+      }
+    }, 5000);
   });
+  
+  return loadPromise;
 }
 
-// 生成 SVG 占位图 dataURL（带文字）- 仅当图片加载失败时使用
+// 立即显示缓存的图片
+function displayCachedImage(imgElement, cacheKey) {
+  if (imageCache.has(cacheKey)) {
+    const cacheItem = imageCache.get(cacheKey);
+    if (cacheItem.loaded && cacheItem.element) {
+      // 立即使用缓存的Image对象
+      imgElement.src = cacheItem.element.src;
+      imgElement.style.opacity = '0';
+      
+      // 使用requestAnimationFrame确保DOM更新
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          imgElement.style.opacity = '1';
+          imgElement.style.transition = 'opacity 0.2s ease';
+        });
+      });
+      
+      return true;
+    }
+  }
+  return false;
+}
+
+// 预加载多个图片
+async function preloadMultipleImages(itemIndices) {
+  const promises = [];
+  
+  for (const index of itemIndices) {
+    if (index >= 0 && index < ITEMS.length) {
+      ['product', 'scene1', 'scene2'].forEach(type => {
+        const cacheKey = getCacheKey(index, type);
+        if (!imageCache.has(cacheKey)) {
+          promises.push(smartPreloadImage(index, type).catch(() => {}));
+        }
+      });
+    }
+  }
+  
+  // 限制并发数量，避免阻塞
+  const batchSize = 3;
+  for (let i = 0; i < promises.length; i += batchSize) {
+    const batch = promises.slice(i, i + batchSize);
+    await Promise.allSettled(batch);
+    // 给浏览器喘息的机会
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+}
+
+// 生成 SVG 占位图 dataURL
 function makePlaceholder(text, w=900, h=540, bg='%23f3f4f6', fg='%23888'){
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="${bg}"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="${fg}">${text}</text></svg>`;
   return 'data:image/svg+xml,' + svg;
@@ -238,29 +327,85 @@ function hideLoading() {
   mainLoading.style.display = 'none';
 }
 
-// 预加载相邻选项的图片（智能预加载）
+// 智能预加载相邻选项
 function preloadAdjacentImages(currentIndex) {
-  // 预加载前一个、当前、后一个选项的图片
   const indicesToPreload = [];
   
-  // 前一个选项
-  if (currentIndex > 0) indicesToPreload.push(currentIndex - 1);
-  // 当前选项
-  indicesToPreload.push(currentIndex);
-  // 后一个选项
-  if (currentIndex < ITEMS.length - 1) indicesToPreload.push(currentIndex + 1);
+  // 预加载当前、前后各2个
+  for (let i = Math.max(0, currentIndex - 2); i <= Math.min(ITEMS.length - 1, currentIndex + 2); i++) {
+    indicesToPreload.push(i);
+  }
   
-  indicesToPreload.forEach(index => {
-    const imageTypes = ['product', 'scene1', 'scene2'];
-    imageTypes.forEach(type => {
-      const src = getImagePath(index, type);
-      if (!imageCache[src]) {
-        preloadImage(src).catch(() => {
-          // 静默失败
+  // 异步预加载，不阻塞UI
+  setTimeout(() => {
+    preloadMultipleImages(indicesToPreload).catch(() => {});
+  }, 100);
+}
+
+// 高性能图片切换函数
+async function switchToItem(itemIndex) {
+  const it = ITEMS[itemIndex];
+  if (!it) return;
+  
+  // 1. 立即更新文字内容
+  detailTitle.textContent = it.title;
+  detailSub.textContent = it.sub;
+  detailFormula.textContent = it.formula;
+  detailScene1Text.textContent = it.scene1Text || '—';
+  detailScene2Text.textContent = it.scene2Text || '—';
+  
+  // 2. 检查缓存并立即显示
+  const imagePromises = [];
+  const displayPromises = [];
+  
+  // 尝试立即显示缓存的图片
+  const cacheKeys = [
+    { key: getCacheKey(itemIndex, 'product'), element: detailPic, alt: it.title + ' 产品图' },
+    { key: getCacheKey(itemIndex, 'scene1'), element: detailScene1, alt: it.title + ' 场景1' },
+    { key: getCacheKey(itemIndex, 'scene2'), element: detailScene2, alt: it.title + ' 场景2' }
+  ];
+  
+  let allCached = true;
+  
+  cacheKeys.forEach(({ key, element, alt }) => {
+    element.alt = alt;
+    
+    if (displayCachedImage(element, key)) {
+      // 图片已缓存，立即显示
+      displayPromises.push(Promise.resolve());
+    } else {
+      // 需要加载新图片
+      allCached = false;
+      showLoading();
+      
+      const loadPromise = smartPreloadImage(itemIndex, key.split('_')[1])
+        .then(() => {
+          // 加载完成后显示
+          displayCachedImage(element, key);
+        })
+        .catch(() => {
+          // 加载失败，显示占位图
+          element.src = makePlaceholder(alt);
+          element.style.opacity = '1';
         });
-      }
-    });
+      
+      imagePromises.push(loadPromise);
+    }
   });
+  
+  // 如果所有图片都已缓存，立即隐藏加载状态
+  if (allCached) {
+    hideLoading();
+  }
+  
+  // 等待所有图片处理完成
+  await Promise.allSettled([...imagePromises, ...displayPromises]);
+  
+  // 确保加载状态被隐藏
+  hideLoading();
+  
+  // 3. 预加载相邻图片
+  preloadAdjacentImages(itemIndex);
 }
 
 function renderTabs(){
@@ -270,123 +415,53 @@ function renderTabs(){
     el.type = 'button';
     el.className = 'tab' + (idx===0 ? ' active' : '');
     el.dataset.id = it.id;
-    el.dataset.index = idx; // 添加索引以便获取图片
+    el.dataset.index = idx;
     el.setAttribute('aria-pressed', idx===0 ? 'true' : 'false');
     el.innerHTML = `<span class="icon" aria-hidden="true">${it.icon}</span><span>${it.title}</span>`;
     
-    // 添加鼠标悬停预加载
-    el.addEventListener('mouseenter', () => {
+    // 添加触摸和悬停预加载
+    const preloadHandler = () => {
       const hoverIndex = parseInt(el.dataset.index);
-      preloadAdjacentImages(hoverIndex);
+      if (!isNaN(hoverIndex)) {
+        preloadAdjacentImages(hoverIndex);
+      }
+    };
+    
+    el.addEventListener('mouseenter', preloadHandler);
+    el.addEventListener('touchstart', preloadHandler, { passive: true });
+    
+    el.addEventListener('click', async () => {
+      // 更新激活状态
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.remove('active');
+        t.setAttribute('aria-pressed', 'false');
+      });
+      el.classList.add('active');
+      el.setAttribute('aria-pressed', 'true');
+      
+      // 切换内容
+      await switchToItem(idx);
     });
     
-    el.addEventListener('click', ()=> select(it.id, el));
     tabs.appendChild(el);
   });
 }
 
-// 当前选中的索引
-let currentIndex = 0;
-
-function select(id, el){
-  // 获取当前选项的索引
-  const itemIndex = ITEMS.findIndex(x=>x.id===id);
-  currentIndex = itemIndex;
-  
-  // 立即更新文字内容（图片加载需要时间）
-  const it = ITEMS.find(x=>x.id===id);
-  if(!it) return;
-  
-  detailTitle.textContent = it.title;
-  detailSub.textContent = it.sub;
-  detailFormula.textContent = it.formula;
-  detailScene1Text.textContent = it.scene1Text || '—';
-  detailScene2Text.textContent = it.scene2Text || '—';
-  
-  // 显示加载状态
-  showLoading();
-  
-  // 移除所有active类
-  document.querySelectorAll('.tab').forEach(t=>{
-    t.classList.remove('active');
-    t.setAttribute('aria-pressed','false');
-  });
-  
-  // 为当前项添加active类
-  if(el){ 
-    el.classList.add('active'); 
-    el.setAttribute('aria-pressed','true'); 
-  }
-  
-  // 获取图片路径
-  const mainImgPath = getImagePath(itemIndex, 'product');
-  const scene1ImgPath = getImagePath(itemIndex, 'scene1');
-  const scene2ImgPath = getImagePath(itemIndex, 'scene2');
-  
-  // 使用Promise.all同时加载三张图片
-  const loadPromises = [
-    loadImageWithCache(detailPic, mainImgPath, it.title + ' 产品图', itemIndex, 'product'),
-    loadImageWithCache(detailScene1, scene1ImgPath, it.title + ' 场景1', itemIndex, 'scene1'),
-    loadImageWithCache(detailScene2, scene2ImgPath, it.title + ' 场景2', itemIndex, 'scene2')
-  ];
-  
-  // 所有图片加载完成后隐藏加载状态
-  Promise.allSettled(loadPromises).then(() => {
-    hideLoading();
-    
-    // 预加载下一个可能用到的图片
-    setTimeout(() => {
-      preloadAdjacentImages(itemIndex);
-    }, 100);
-  });
-}
-
-// 使用缓存的图片加载函数
-function loadImageWithCache(imgElement, src, alt, itemIndex, imageType) {
-  return new Promise((resolve) => {
-    // 如果图片已经在缓存中，直接使用
-    if (imageCache[src]) {
-      imgElement.src = src;
-      imgElement.alt = alt;
-      resolve();
-      return;
-    }
-    
-    // 否则加载新图片
-    imgElement.src = src;
-    imgElement.alt = alt;
-    
-    const img = new Image();
-    img.onload = () => {
-      // 存入缓存
-      imageCache[src] = img;
-      imgElement.src = src;
-      resolve();
-    };
-    
-    img.onerror = () => {
-      console.warn(`图片加载失败: ${src}`);
-      imgElement.src = makePlaceholder(alt);
-      imgElement.onerror = null; // 防止无限循环
-      resolve();
-    };
-    
-    img.src = src;
-  });
-}
-
-// 复制按钮 - 兼容性处理
-document.getElementById('btn-copy').addEventListener('click', ()=>{
+// 复制按钮
+document.getElementById('btn-copy').addEventListener('click', () => {
   const text = `${detailTitle.textContent}
 ${detailSub.textContent}
 配方：${detailFormula.textContent}`;
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板'))
-      .catch(()=>{ fallbackCopy(text); });
+  
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => alert('已复制到剪贴板'))
+      .catch(() => fallbackCopy(text));
   } else {
     fallbackCopy(text);
   }
 });
+
 function fallbackCopy(text){
   const ta = document.createElement('textarea'); 
   ta.value = text; 
@@ -402,20 +477,29 @@ function fallbackCopy(text){
 }
 
 // 初始化
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
   renderTabs();
   
-  // 预加载第一个选项的图片
-  preloadAdjacentImages(0);
+  // 立即预加载第一个选项的图片
+  await preloadMultipleImages([0, 1, 2]);
   
-  // 在空闲时间预加载所有图片（延迟执行，不阻塞页面渲染）
-  setTimeout(() => {
-    preloadAllImages();
-  }, 2000);
-  
+  // 设置第一个标签为激活状态并显示
   const firstTab = document.querySelector('.tab');
-  if(firstTab){ 
-    select(firstTab.dataset.id, firstTab); 
+  if (firstTab) {
+    firstTab.click();
+  }
+  
+  // 空闲时预加载所有图片
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(() => {
+      const allIndices = ITEMS.map((_, idx) => idx);
+      preloadMultipleImages(allIndices).catch(() => {});
+    }, { timeout: 3000 });
+  } else {
+    setTimeout(() => {
+      const allIndices = ITEMS.map((_, idx) => idx);
+      preloadMultipleImages(allIndices).catch(() => {});
+    }, 3000);
   }
 });
 </script>
