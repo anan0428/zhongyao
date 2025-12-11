@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>中药配方（优化版，全部预加载）</title>
+  <title>中药配方（优化版 — 优先加载 & 优化切换）</title>
   <style>
     :root{--bg:#f6f8fb;--card:#ffffff;--muted:#6b7280;--accent:#7c3aed;--radius:12px}
     *{box-sizing:border-box}
@@ -20,14 +20,13 @@
     .tab .icon{font-size:18px;line-height:1;flex-shrink:0}
     .tab span{display:inline-block;max-width:120px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
     .tab.active{border-color:var(--accent);color:var(--accent);font-weight:600}
-    .tab[disabled]{opacity:0.6;pointer-events:none}
 
     /* 主内容卡片 */
     .card-main{background:var(--card);border-radius:var(--radius);padding:14px;margin-top:10px;box-shadow:0 8px 20px rgba(0,0,0,0.06)}
     .hero{display:flex;gap:12px;align-items:flex-start}
     .hero .pic{width:140px;height:140px;border-radius:10px;overflow:hidden;background:#eee;flex-shrink:0;position:relative}
-    .hero img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity 0.25s ease}
-    .hero img.loading{opacity:0.5}
+    .hero img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity 0.22s ease}
+    .hero img.loading{opacity:0.4}
     h2{margin:0;font-size:17px}
     .meta{font-size:13px;color:var(--muted);margin-top:4px}
 
@@ -35,9 +34,8 @@
     .label{font-size:13px;color:var(--muted);margin-bottom:6px}
     .box{background:#fdfefe;padding:10px;border-radius:10px;font-size:14px;border:1px solid rgba(0,0,0,0.04)}
 
-    /* 场景大图样式：每张独占一行，尺寸更大 */
-    .scene-img{width:100%;height:180px;object-fit:cover;border-radius:8px;background:#f3f4f6;display:block;transition:opacity 0.25s ease}
-    .scene-img.loading{opacity:0.5}
+    .scene-img{width:100%;height:180px;object-fit:cover;border-radius:8px;background:#f3f4f6;display:block;transition:opacity 0.22s ease}
+    .scene-img.loading{opacity:0.4}
     .scene-text{margin-top:8px;color:var(--muted);font-size:14px}
 
     footer{margin-top:14px;display:flex;gap:10px}
@@ -57,10 +55,6 @@
     .progress-bar{height:12px;border-radius:8px;background:linear-gradient(90deg,var(--accent),#5b21b6);width:0%;transition:width 200ms linear}
     .progress-percent{margin-top:8px;font-size:13px;color:var(--muted)}
     .preloader-spinner{margin-top:12px;border:4px solid rgba(0,0,0,0.06);border-top-color:var(--accent);border-radius:50%;width:36px;height:36px;animation:spin 1s linear infinite}
-    .preloader-actions{margin-top:10px;display:flex;gap:8px;justify-content:center}
-    .preloader-actions button{padding:8px 12px;border-radius:8px;border:0;font-weight:600}
-    .btn-skip{background:#fff;color:var(--accent);border:1px solid rgba(0,0,0,0.06)}
-    .btn-wait{background:var(--accent);color:#fff}
     @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
@@ -68,24 +62,20 @@
 <!-- 全屏预加载遮罩 -->
 <div id="preloader" aria-hidden="false">
   <div class="preloader-card" role="status" aria-live="polite">
-    <div class="preloader-title">正在预加载页面资源…</div>
-    <div class="preloader-sub">页面将在所有图片加载完成后自动进入（或点击“直接进入”跳过）</div>
+    <div class="preloader-title">正在准备页面…</div>
+    <div class="preloader-sub">高速优先加载主图，后台并行加载其余图片</div>
     <div class="progress-wrap">
       <div id="progressBar" class="progress-bar" style="width:0%"></div>
     </div>
     <div id="progressPercent" class="progress-percent">0%</div>
     <div class="preloader-spinner" aria-hidden="true"></div>
-    <div class="preloader-actions">
-      <button id="skipBtn" class="btn-skip">直接进入</button>
-      <button id="waitBtn" class="btn-wait">继续等待</button>
-    </div>
   </div>
 </div>
 
 <div class="app" id="appContent" style="visibility:hidden;">
   <header>
-    <h1>中药配方速查（优化版，全部预加载）</h1>
-    <p class="lead">改进点：现在页面会尽力把所有图片都预加载完成，加载完成后标签可用。</p>
+    <h1>中药配方速查（优化版）</h1>
+    <p class="lead">改进点：优先队列、去重加载、并发适配、快速低质量占位、点击优先加载。</p>
   </header>
 
   <!-- 两行图标标签栏 -->
@@ -133,7 +123,7 @@
 </div>
 
 <script>
-/* ------------------ 数据与基础工具 ------------------ */
+/* ------------------ 数据 ------------------ */
 const ITEMS = [
   {id:'insomnia', title:'失眠/压力大', icon:'🌙', sub:'安神助眠款', scene1Text:'酒店客房餐', scene2Text:'深夜便利店', formula:'面粉+酸枣仁+茯苓+远志'},
   {id:'children', title:'儿童/积食人群', icon:'🧒', sub:'健脾消积款', scene1Text:'亲子餐厅', scene2Text:'幼儿园配餐', formula:'面粉+鸡内金+麦芽+山楂'},
@@ -145,7 +135,6 @@ const ITEMS = [
   {id:'stomach', title:'胃寒/秋冬胃痛', icon:'🍜', sub:'温胃散寒款', scene1Text:'北方早餐摊', scene2Text:'社区便民食堂', formula:'面粉+小茴香+干姜+胡椒'}
 ];
 const IMG_BASE_PATH = './img/';
-
 function getImageUrl(itemIndex, imageType){
   const imageNumber = itemIndex + 1;
   const imageTypeMap = {'product':1,'scene1':2,'scene2':3};
@@ -153,111 +142,110 @@ function getImageUrl(itemIndex, imageType){
 }
 function getCacheKey(itemIndex, imageType){ return `${itemIndex}_${imageType}`; }
 
-/* ------------------ 强化缓存与并发载入器 ------------------ */
-const imageCache = new Map();
-const objectUrlsToRevoke = new Set();
-
-// 并发限制
-const MAX_CONCURRENCY = 4; // 可根据网络/服务器调整
+/* ------------------ 高级加载器（改进点） ------------------
+   - 去重：正在加载的 key 会保存一个 loadingPromise，避免重复请求
+   - 优先级：点击加载会放入队列前面（priority = true）
+   - 并发：可调的 MAX_CONCURRENCY
+   - 更快回退：低质量占位图 + 渐显
+   - fetch 使用 'force-cache' 以更好重用浏览器缓存（对已部署页面有用）
+*/
+const imageCache = new Map(); // key -> {src, blob, loaded, error, loadingPromise}
+const controllers = new Map(); // key -> AbortController (可用于取消)
+let MAX_CONCURRENCY = 6; // 适当提高以利用http/2或本地网络
 let currentConcurrency = 0;
-const queue = [];
+const queue = []; // {fn,resolve,reject,priority}
 
-function enqueueLoad(fn){
-  return new Promise((resolve, reject)=>{
-    queue.push({fn,resolve,reject});
+function enqueueLoad(taskFn, priority=false){
+  return new Promise((resolve,reject)=>{
+    const job = {fn:taskFn, resolve, reject, priority};
+    if (priority) queue.unshift(job); else queue.push(job);
     processQueue();
   });
 }
+
 function processQueue(){
-  if (!queue.length || currentConcurrency >= MAX_CONCURRENCY) return;
-  const item = queue.shift();
+  if (!queue.length) return;
+  if (currentConcurrency >= MAX_CONCURRENCY) return;
+  const job = queue.shift();
   currentConcurrency++;
-  item.fn().then(res=>{
-    currentConcurrency--;
-    item.resolve(res);
-    processQueue();
-  }).catch(err=>{
-    currentConcurrency--;
-    item.reject(err);
-    processQueue();
-  });
+  job.fn().then(res=>{ currentConcurrency--; job.resolve(res); processQueue(); }).catch(err=>{ currentConcurrency--; job.reject(err); processQueue(); });
 }
 
-// 使用 fetch + createImageBitmap 来把解码移出主线程（若支持）
-async function fetchAndDecodeImage(url, timeoutMs=12000){
+async function fetchAndDecodeImage(url, timeoutMs=9000, key=null){
+  // 如果已有 controller，复用或覆盖
   const controller = new AbortController();
+  if (key) controllers.set(key, controller);
   const id = setTimeout(()=> controller.abort(), timeoutMs);
   try{
-    const resp = await fetch(url, {signal: controller.signal, cache: 'no-cache'});
+    // 更友好的 cache 策略（可配置）
+    const resp = await fetch(url, {signal: controller.signal, cache: 'force-cache'});
     if (!resp.ok) throw new Error('网络错误 ' + resp.status);
     const blob = await resp.blob();
-
-    // 尝试在工作线程里解码位图
+    // 尝试 createImageBitmap 加速解码
     if (typeof createImageBitmap === 'function'){
       try{
         const bitmap = await createImageBitmap(blob);
         clearTimeout(id);
         return {blob, bitmap};
-      }catch(e){
-        clearTimeout(id);
-        return {blob, bitmap: null};
-      }
-    }else{
-      clearTimeout(id);
-      return {blob, bitmap:null};
+      }catch(e){ clearTimeout(id); return {blob, bitmap:null}; }
     }
-  }catch(err){
     clearTimeout(id);
-    throw err;
-  }
+    return {blob, bitmap:null};
+  }catch(err){ clearTimeout(id); throw err; }
 }
 
-// 智能加载（并发受控）
-function smartLoadImage(itemIndex, imageType){
-  const cacheKey = getCacheKey(itemIndex, imageType);
-  if (imageCache.has(cacheKey)){
-    return Promise.resolve(imageCache.get(cacheKey));
+function smartLoadImage(itemIndex, imageType, {priority=false} = {}){
+  const key = getCacheKey(itemIndex, imageType);
+  const existing = imageCache.get(key);
+  if (existing){
+    // 如果已加载，直接返回
+    if (existing.loaded) return Promise.resolve(existing);
+    // 如果正在加载，返回它的 promise
+    if (existing.loadingPromise) return existing.loadingPromise;
   }
 
+  // 创建加载任务并把 loadingPromise 存入 cache（避免重复）
   const url = getImageUrl(itemIndex, imageType);
-
-  return enqueueLoad(async ()=>{
+  const task = async ()=>{
     try{
-      const {blob, bitmap} = await fetchAndDecodeImage(url);
+      const {blob, bitmap} = await fetchAndDecodeImage(url, 9000, key);
       const objectUrl = URL.createObjectURL(blob);
-      objectUrlsToRevoke.add(objectUrl);
-      const cacheItem = {src: objectUrl, blob, bitmap, loaded: true, url};
-      imageCache.set(cacheKey, cacheItem);
-      return cacheItem;
+      const item = {src: objectUrl, blob, bitmap, loaded:true, url};
+      imageCache.set(key, item);
+      controllers.delete(key);
+      return item;
     }catch(err){
-      const cacheItem = {src: null, loaded:false, error:true, url};
-      imageCache.set(cacheKey, cacheItem);
+      const item = {src:null, loaded:false, error:true, url};
+      imageCache.set(key, item);
+      controllers.delete(key);
       throw err;
     }
-  });
+  };
+
+  const promise = enqueueLoad(task, priority).then(res=>res).catch(err=>{ throw err; });
+  imageCache.set(key, {loadingPromise: promise});
+  return promise;
 }
 
-// Try immediate sync display from cache
-function displayCachedImage(imgElement, cacheKey, alt){
-  if (imageCache.has(cacheKey)){
-    const cacheItem = imageCache.get(cacheKey);
-    if (cacheItem.loaded && cacheItem.src){
-      imgElement.src = cacheItem.src;
-      imgElement.alt = alt || imgElement.alt;
-      imgElement.style.opacity = '0';
-      requestAnimationFrame(()=> requestAnimationFrame(()=>{ imgElement.style.opacity='1'; imgElement.style.transition='opacity 0.2s ease'; }));
-      return true;
-    }
+function displayCachedImage(imgEl, key, alt){
+  const entry = imageCache.get(key);
+  if (entry && entry.loaded && entry.src){
+    imgEl.src = entry.src;
+    imgEl.alt = alt || imgEl.alt;
+    imgEl.style.opacity = '0';
+    requestAnimationFrame(()=> requestAnimationFrame(()=>{ imgEl.style.opacity='1'; imgEl.style.transition='opacity 0.18s ease'; }));
+    return true;
   }
   return false;
 }
 
-function makePlaceholder(text, w=900, h=540, bg='%23f3f4f6', fg='%23888'){
-  const svg = `<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"${w}\" height=\"${h}\"><rect width=\"100%\" height=\"100%\" fill=\"${bg}\"/><text x=\"50%\" y=\"50%\" dominant-baseline=\"middle\" text-anchor=\"middle\" font-family=\"Arial,Helvetica,sans-serif\" font-size=\"20\" fill=\"${fg}\">${text}</text></svg>`;
-  return 'data:image/svg+xml,' + svg;
+function makeSmallPlaceholder(text){
+  // 更小的 SVG 占位以减少切换时白屏
+  const svg = `<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"180\"><rect width=\"100%\" height=\"100%\" fill=\"%23f3f4f6\"/><text x=\"50%\" y=\"50%\" dominant-baseline=\"middle\" text-anchor=\"middle\" font-family=\"Arial,Helvetica,sans-serif\" font-size=\"14\" fill=\"%23888\">${text}</text></svg>`;
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
 }
 
-/* ------------------ UI 与预加载策略 ------------------ */
+/* ------------------ UI & 预加载策略 ------------------ */
 const tabs = document.getElementById('tabs');
 const detailPic = document.getElementById('detail-pic').querySelector('img');
 const detailTitle = document.getElementById('detail-title');
@@ -271,191 +259,146 @@ const mainLoading = document.getElementById('main-loading');
 const preloader = document.getElementById('preloader');
 const progressBar = document.getElementById('progressBar');
 const progressPercent = document.getElementById('progressPercent');
-const skipBtn = document.getElementById('skipBtn');
-const waitBtn = document.getElementById('waitBtn');
 
 function showLoading(){ mainLoading.style.display='block'; detailPic.classList.add('loading'); detailScene1.classList.add('loading'); detailScene2.classList.add('loading'); }
 function hideLoading(){ mainLoading.style.display='none'; detailPic.classList.remove('loading'); detailScene1.classList.remove('loading'); detailScene2.classList.remove('loading'); }
 
-function enableTabs(){ document.querySelectorAll('.tab').forEach(t=>{ t.disabled=false; t.classList.remove('tab-disabled'); }); }
-
-// 预加载一组索引（并发受控）
-async function preloadMultipleImages(itemIndices){
-  const tasks = [];
-  itemIndices.forEach(index=>{
-    if (index>=0 && index<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>{
-      const key = getCacheKey(index,type);
-      if (!imageCache.has(key)) tasks.push(smartLoadImage(index,type).catch(()=>{}));
-    }); }
-  });
-  const batchSize = 6;
-  for (let i=0;i<tasks.length;i+=batchSize){
-    await Promise.allSettled(tasks.slice(i,i+batchSize));
-    await new Promise(r=>setTimeout(r,40));
-  }
-}
-
-function preloadAdjacentImages(currentIndex){
-  const indicesToPreload = [];
-  for (let i=Math.max(0,currentIndex-2);i<=Math.min(ITEMS.length-1,currentIndex+2);i++){ indicesToPreload.push(i); }
-  setTimeout(()=>{ preloadMultipleImages(indicesToPreload).catch(()=>{}); }, 80);
-}
-
-// 新：用于初始预加载并报告进度（这次我们传入所有索引以尽力把全部图片加载完）
-function preloadInitialWithProgress(indices, onProgress, timeout=20000){
+async function preloadInitialWithProgress(indices, onProgress, timeout=12000){
   const keys = [];
-  indices.forEach(index=>{
-    if (index>=0 && index<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>{ keys.push({index,type}); }); }
-  });
-  let completed = 0;
-  const total = keys.length;
-
+  indices.forEach(index=>{ if (index>=0 && index<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>keys.push({index,type})); } });
+  let completed = 0; const total = keys.length;
   const trackers = keys.map(({index,type})=>{
     const key = getCacheKey(index,type);
-    if (imageCache.has(key)){
-      completed++; onProgress(Math.round((completed/total)*100));
-      return Promise.resolve();
-    }
-    return smartLoadImage(index,type).then(()=>{
-      completed++; onProgress(Math.round((completed/total)*100));
-    }).catch(()=>{
-      completed++; onProgress(Math.round((completed/total)*100));
-    });
+    if (imageCache.has(key) && imageCache.get(key).loaded){ completed++; onProgress(Math.round((completed/total)*100)); return Promise.resolve(); }
+    // 优先级：主图更高，这里不给每个不同优先级，但在 switch 时会使用 priority=true
+    return smartLoadImage(index,type,{priority:false}).then(()=>{ completed++; onProgress(Math.round((completed/total)*100)); }).catch(()=>{ completed++; onProgress(Math.round((completed/total)*100)); });
   });
 
   const allSettled = Promise.allSettled(trackers);
   const timer = new Promise((resolve)=> setTimeout(resolve, timeout, 'timeout'));
-  return Promise.race([allSettled, timer]).then(result=>{ return result === 'timeout' ? {timeout:true} : {timeout:false}; });
+  return Promise.race([allSettled, timer]).then(result=> result === 'timeout' ? {timeout:true} : {timeout:false});
 }
 
-// 切换条目，尽量立即显示缓存并并发加载缺失图片
+async function preloadMultipleImages(indices){
+  const tasks = [];
+  indices.forEach(idx=>{ if (idx>=0 && idx<ITEMS.length){ ['product','scene1','scene2'].forEach(type=>{ const key = getCacheKey(idx,type); if (!imageCache.has(key) || !imageCache.get(key).loaded) tasks.push(smartLoadImage(idx,type,{priority:false}).catch(()=>{})); }); } });
+  // throttle batches
+  const batch = 8;
+  for (let i=0;i<tasks.length;i+=batch){ await Promise.allSettled(tasks.slice(i,i+batch)); await new Promise(r=>setTimeout(r,30)); }
+}
+
+function preloadAdjacent(currentIndex){
+  const arr = [];
+  for (let i=Math.max(0,currentIndex-2); i<=Math.min(ITEMS.length-1,currentIndex+2); i++) arr.push(i);
+  setTimeout(()=>{ preloadMultipleImages(arr).catch(()=>{}); }, 60);
+}
+
 async function switchToItem(itemIndex){
   const it = ITEMS[itemIndex]; if(!it) return;
   detailTitle.textContent = it.title; detailSub.textContent = it.sub; detailFormula.textContent = it.formula; detailScene1Text.textContent = it.scene1Text || '—'; detailScene2Text.textContent = it.scene2Text || '—';
 
-  const cacheKeys = [
-    {key:getCacheKey(itemIndex,'product'), el:detailPic, alt:it.title+' 产品图'},
-    {key:getCacheKey(itemIndex,'scene1'), el:detailScene1, alt:it.title+' 场景1'},
-    {key:getCacheKey(itemIndex,'scene2'), el:detailScene2, alt:it.title+' 场景2'}
+  // 优先显示缓存
+  const keys = [
+    {k:getCacheKey(itemIndex,'product'), el:detailPic, alt:it.title+' 产品图'},
+    {k:getCacheKey(itemIndex,'scene1'), el:detailScene1, alt:it.title+' 场景1'},
+    {k:getCacheKey(itemIndex,'scene2'), el:detailScene2, alt:it.title+' 场景2'}
   ];
 
-  let needLoad = false;
-  cacheKeys.forEach(({key,el,alt})=>{
-    el.alt = alt;
-    if (!displayCachedImage(el,key,alt)){
-      needLoad = true;
-      el.src = makePlaceholder(alt, 600, 360);
-      el.style.opacity = '1';
+  let needLoad=false;
+  keys.forEach(({k,el,alt})=>{
+    el.alt=alt;
+    if (!displayCachedImage(el,k,alt)){
+      // 用小占位快速展示，避免白屏
+      el.src = makeSmallPlaceholder(alt);
+      el.style.opacity='1';
+      needLoad=true;
     }
-    if (el === detailPic){ el.loading = 'eager'; el.decoding='async'; }
+    if (el===detailPic){ el.loading='eager'; el.decoding='async'; }
   });
-
   if (needLoad) showLoading();
 
-  const loadPromises = cacheKeys.map(({key})=>{
-    if (imageCache.has(key)) return Promise.resolve();
-    const [indexStr,type] = key.split('_');
-    const itemIdx = parseInt(indexStr);
-    return smartLoadImage(itemIdx,type).then(cacheItem=>{
-      const targetEl = cacheKeys.find(c=>c.key===key).el;
-      if (targetEl){
-        targetEl.src = cacheItem.src || makePlaceholder(cacheItem.url || 'image');
-        targetEl.style.opacity='0';
-        requestAnimationFrame(()=> requestAnimationFrame(()=>{ targetEl.style.opacity='1'; targetEl.style.transition='opacity 0.18s ease'; }));
-      }
+  // 请求优先级：产品图优先（priority=true）
+  const promises = keys.map(({k})=>{
+    if (imageCache.has(k) && imageCache.get(k).loaded) return Promise.resolve();
+    const [idx,type] = k.split('_');
+    const id = parseInt(idx,10);
+    const priority = type === 'product';
+    return smartLoadImage(id,type,{priority}).then(item=>{
+      const target = keys.find(x=>x.k===k).el;
+      if (target){ target.src = item.src || makeSmallPlaceholder('image'); target.style.opacity='0'; requestAnimationFrame(()=> requestAnimationFrame(()=>{ target.style.opacity='1'; target.style.transition='opacity 0.18s ease'; })); }
     }).catch(()=>{
-      const targetEl = cacheKeys.find(c=>c.key===key).el;
-      if (targetEl) targetEl.src = makePlaceholder('加载失败');
+      const target = keys.find(x=>x.k===k).el; if (target) target.src = makeSmallPlaceholder('加载失败');
     });
   });
 
-  try{
-    await Promise.race([
-      Promise.all([loadPromises[0]]),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('主图加载超时')),1500))
-    ]);
-  }catch(e){ }
+  // 等待主图快速返回或短超时
+  try{ await Promise.race([ promises[0], new Promise((_,rej)=>setTimeout(()=>rej('timeout'),1200)) ]); }catch(e){}
 
-  await Promise.allSettled(loadPromises);
+  await Promise.allSettled(promises);
   hideLoading();
-  preloadAdjacentImages(itemIndex);
+  preloadAdjacent(itemIndex);
 }
 
-/* ------------------ 渲染标签与交互 ------------------ */
-function renderTabs(){
-  tabs.innerHTML='';
-  ITEMS.forEach((it,idx)=>{
-    const el = document.createElement('button');
-    el.type='button'; el.className='tab' + (idx===0 ? ' active' : ''); el.dataset.index=idx; el.setAttribute('aria-pressed', idx===0 ? 'true' : 'false');
-    el.disabled = true; // 初始禁用，等全部预加载完成或跳过后启用
-    el.innerHTML = `<span class=\"icon\">${it.icon}</span><span>${it.title}</span>`;
+/* ------------------ 渲染标签 & 交互 ------------------ */
+function renderTabs(){ tabs.innerHTML=''; ITEMS.forEach((it,idx)=>{
+  const el = document.createElement('button'); el.type='button'; el.className='tab' + (idx===0? ' active':''); el.dataset.index=idx; el.setAttribute('aria-pressed', idx===0?'true':'false'); el.innerHTML=`<span class=\"icon\">${it.icon}</span><span>${it.title}</span>`;
+  el.addEventListener('mouseenter', ()=>{ const i=parseInt(el.dataset.index); if (!isNaN(i)) preloadAdjacent(i); });
+  el.addEventListener('touchstart', ()=>{ const i=parseInt(el.dataset.index); if (!isNaN(i)) preloadAdjacent(i); },{passive:true});
+  el.addEventListener('click', async ()=>{ document.querySelectorAll('.tab').forEach(t=>{ t.classList.remove('active'); t.setAttribute('aria-pressed','false'); }); el.classList.add('active'); el.setAttribute('aria-pressed','true'); await switchToItem(parseInt(el.dataset.index)); });
+  tabs.appendChild(el);
+}); }
 
-    const preloadHandler = ()=>{ const hoverIndex = parseInt(el.dataset.index); if (!isNaN(hoverIndex)) preloadAdjacentImages(hoverIndex); };
-    el.addEventListener('mouseenter', preloadHandler);
-    el.addEventListener('touchstart', preloadHandler, {passive:true});
-
-    el.addEventListener('click', async ()=>{
-      document.querySelectorAll('.tab').forEach(t=>{ t.classList.remove('active'); t.setAttribute('aria-pressed','false'); });
-      el.classList.add('active'); el.setAttribute('aria-pressed','true');
-      await switchToItem(idx);
-    });
-
-    tabs.appendChild(el);
-  });
-}
-
-// 复制
-document.getElementById('btn-copy').addEventListener('click', ()=>{
-  const text = `${detailTitle.textContent}
-${detailSub.textContent}
-配方：${detailFormula.textContent}`;
-  if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板')).catch(()=>fallbackCopy(text)); }
-  else fallbackCopy(text);
-});
-function fallbackCopy(text){ const ta = document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动复制:
-'+text); } ta.remove(); }
+// copy
+document.getElementById('btn-copy').addEventListener('click', ()=>{ const text = `${detailTitle.textContent}\n${detailSub.textContent}\n配方：${detailFormula.textContent}`; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板')).catch(()=>fallbackCopy(text)); else fallbackCopy(text); });
+function fallbackCopy(text){ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动复制:\n'+text);} ta.remove(); }
 
 /* ------------------ 初始化 ------------------ */
-window.addEventListener('beforeunload', ()=>{ objectUrlsToRevoke.forEach(u=>{ try{ URL.revokeObjectURL(u); }catch(e){} }); });
+window.addEventListener('beforeunload', ()=>{ // 清理 object URLs
+  imageCache.forEach(val=>{ if (val && val.src) try{ URL.revokeObjectURL(val.src); }catch(e){} });
+});
 
 document.addEventListener('DOMContentLoaded', async ()=>{
   renderTabs();
+  // 先快速并优先加载 0 的主图与当前页面所需小量资源
+  const initial = [0];
+  let lastPct = 0;
+  function onProgress(pct){ lastPct=pct; progressBar.style.width = pct + '%'; progressPercent.textContent = pct + '%'; }
 
-  // 我们这次尽力把 **全部** 图片都预加载完成后再展示页面（可通过“直接进入”跳过）
-  const allIndices = ITEMS.map((_,i)=>i);
-  const totalImages = allIndices.length * 3;
+  // 初始化优先加载：把每个条目的 product(主图) 先作为初始队列，以提高切换时命中率
+  const indexList = ITEMS.map((_,i)=>i);
+  // 1) 先并行加载所有 product（优先），以减少切换主图的等待
+  const productTasks = indexList.map(i=> smartLoadImage(i,'product',{priority:false}).catch(()=>{}));
+  // 2) 在后台继续加载场景图，但不阻塞首屏：使用批量方式
+  const sceneTasks = [];
+  indexList.forEach(i=>{ ['scene1','scene2'].forEach(t=> sceneTasks.push(()=> smartLoadImage(i,t,{priority:false}).catch(()=>{}))); });
 
-  let aborted = false;
-  skipBtn.addEventListener('click', ()=>{
-    aborted = true; // 标记为用户跳过
-    preloader.setAttribute('aria-hidden','true');
-    preloader.style.display = 'none';
-    document.getElementById('appContent').style.visibility = 'visible';
-    enableTabs();
-    // 继续在后台加载剩余图片
-    preloadMultipleImages(allIndices).catch(()=>{});
-  });
-  waitBtn.addEventListener('click', ()=>{ /* do nothing: 继续等待 */ });
+  // 进度：产品图完成比例作为预加载进度基础
+  const totalProducts = productTasks.length;
+  let doneProducts = 0;
+  productTasks.forEach(p=> p.then(()=>{ doneProducts++; const pct = Math.round((doneProducts/totalProducts)*60); onProgress(pct); }).catch(()=>{ doneProducts++; const pct = Math.round((doneProducts/totalProducts)*60); onProgress(pct); }));
 
-  // 开始预加载全部图片并汇报进度（timeout 20s）
-  function onProgress(pct){ progressBar.style.width = pct + '%'; progressPercent.textContent = pct + '%'; }
-  const res = await preloadInitialWithProgress(allIndices, onProgress, 20000);
+  // 等待产品图主要完成或短超时
+  try{ await Promise.race([ Promise.all(productTasks), new Promise((_,rej)=>setTimeout(()=>rej('timeout'),7000)) ]); }catch(e){}
+  onProgress(70);
 
-  if (!aborted){
-    // 若超时，也放行（避免一直卡住）
-    if (res && res.timeout) onProgress(100);
-    preloader.setAttribute('aria-hidden','true');
-    preloader.style.display = 'none';
-    document.getElementById('appContent').style.visibility = 'visible';
-    enableTabs();
+  // 继续批量加载场景图，并更新进度
+  const batch = 6; let completed = 0; const totalScenes = sceneTasks.length;
+  for (let i=0;i<sceneTasks.length;i+=batch){ const batchFns = sceneTasks.slice(i,i+batch).map(fn=>fn()); await Promise.allSettled(batchFns); completed+=batchFns.length; const pct = 70 + Math.round((completed/totalScenes)*30); onProgress(Math.min(100,pct)); }
 
-    // 触发第一个标签显示（首次切换会使用缓存的图片）
-    const firstTab = document.querySelector('.tab');
-    if (firstTab){ firstTab.click(); }
+  // 小延迟确保用户看见 100%
+  await new Promise(r=>setTimeout(r,200));
 
-    // 任何未完全加载的资源继续在后台加载
-    preloadMultipleImages(allIndices).catch(()=>{});
-  }
+  // 隐藏 preloader
+  preloader.setAttribute('aria-hidden','true'); preloader.style.display='none'; document.getElementById('appContent').style.visibility='visible';
+
+  // 打开页面后，点击第一个tab触发展示（会命中已加载的主图）
+  const first = document.querySelector('.tab'); if (first) first.click();
+
+  // 后台继续确保任何未加载的资源补齐
+  setTimeout(()=>{ // small delay to let UI settle
+    const remainingIndices = ITEMS.map((_,i)=>i);
+    preloadMultipleImages(remainingIndices).catch(()=>{});
+  }, 500);
 });
 </script>
 </body>
